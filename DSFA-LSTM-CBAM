@@ -1,0 +1,256 @@
+class SFA(TransformerMixin, BaseEstimator):
+  def __init__(self, n_components=None, *, batch_size=None, copy=True,
+    svd_solver="full", tol=.0, iterated_power="auto",
+    random_state=None, robustness_cutoff=1e-15,
+    fill_mode="noise"):
+    self.n_components = n_components
+    self.svd_solver = svd_solver
+    self.copy = copy
+    self.tol = tol
+    self.iterated_power = iterated_power
+    self.random_state = random_state
+    self.batch_size = batch_size
+    self.robustness_cutoff = robustness_cutoff
+    self.fill_mode = fill_mode
+def _initialise_pca(self):
+  self.pca_whiten_ = PCA(svd_solver=self.svd_solver,
+  tol=self.tol, whiten=True)
+  if  self.batch_size is None:
+    self.pca_diff_ = PCA(svd_solver=self.svd_solver, tol=self.tol)
+  else:
+    self.pca_diff_ = IncrementalPCA()
+def fit(self, X, y=None):
+  X = check_array(X, dtype=[np.float64, np.float32], ensure_2d=True,
+  copy=self.copy, ensure_min_features=1)
+  X = check_array(X, dtype=[np.float64, np.float32], ensure_2d=True,
+  copy=self.copy,
+  ensure_min_samples=10 if self.batch_size is None
+  else self.batch_size)
+  self.input_dim_ = X.shape[1]
+  if self.n_components is None:
+  self.n_components_ = self.input_dim_
+  else:
+  self.n_components_ = self.n_components
+  self._initialise_pca()
+  if issparse(X):
+  raise TypeError('SFA does not support sparse input.')
+  self._fit(X)
+  self.is_fitted_ = True
+  return self
+def partial(self, X, y=None):
+  n_samples = X.shape[0]
+  assert(not self.is_fitted)
+  if not self.is_partially_fitted:
+  self._diff_sum = None
+  self._n_partial_samples = 0
+  self._n_partial_diff_samples = 0
+  self._partial_eigenvectors = None
+  self._partial_eigenvalues = None
+  if self.batch_size is None:
+  self._accumulate(X)
+  self.last_partial_sample = X[-1]
+  else:
+  n_batches = math.ceil(n_samples/self.batch_size)
+  for batch_idx in range(n_batches):
+  current_batch = X[batch_idx * self.batch_size: (batch_idx + 1) * self.batch_size]
+  self._accumulate(current_batch)
+  self.last_partial_sample = current_batch[-1]
+  self.is_partially_fitted_ = True
+  return self
+
+def partial(self, X, y=None):
+  n_samples = X.shape[0]
+  assert(not self.is_fitted)
+  if not self.is_partially_fitted:
+  self._diff_sum = None
+  self._n_partial_samples = 0
+  self._n_partial_diff_samples = 0
+  self._partial_eigenvectors = None
+  self._partial_eigenvalues = None
+  if self.batch_size is None:
+  self._accumulate(X)
+  self.last_partial_sample = X[-1]
+  else:
+  n_batches = math.ceil(n_samples/self.batch_size)
+  for batch_idx in range(n_batches):
+  current_batch = X[batch_idx * self.batch_size: (batch_idx + 1) * self.batch_size]
+  self._accumulate(current_batch)
+  self.last_partial_sample = current_batch[-1]
+  self.is_partially_fitted_ = True
+  return self
+def _fit(self, X):
+self._fit_standard_method(X)
+n_samples, input_dim = X.shape
+self.pca_whiten_.fit(X)
+X_whitened = self.pca_whiten_.transform(X)
+input_evr = self.pca_whiten_.explained_variance_ratio_
+nontrivial_indices = np.argwhere(input_evr > self.robustness_cutoff)
+self.nontrivial_indices_ = nontrivial_indices.reshape((-1,))
+self.n_nontrivial_components_ = self.nontrivial_indices_.shape[0]
+self.n_trivial_ = input_dim - self.n_nontrivial_components_
+X_whitened = X_whitened[:, self.nontrivial_indices_]
+
+X_diff = X_whitened[1:] - X_whitened[:-1]
+self._diff_mean = X_diff.mean(axis=0)
+X_diff -= self._diff_mean
+
+if self.batch_size is None:
+self.pca_diff_.fit(X_diff)
+else:
+n_batches = int(n_samples/self.batch_size)
+current_slowness = 0
+for batch_idx in range(n_batches):
+batch_start = batch_idx * self.batch_size
+batch_end = (batch_idx + 1) * self.batch_size
+current_batch = X_whitened[batch_start:batch_end]
+batch_diff = current_batch[1:] - current_batch[:-1]
+self.pca_diff_.partial_fit(batch_diff - self._diff_mean)
+if self.n_nontrivial_components_ == 0:
+raise ValueError(f"While whitening, only trivial components were \
+found. This can be caused by passing 0-only input.")
+if self.n_nontrivial_components_ < self.n_components_:
+warning_string = f"During whitening, {self.n_trivial_} trivial components "\
+if self.fill_mode is not None:
+warning_string += f"\nSince 'fill_mode' is set to {self.fill_mode}, "\
+"missing output features will be filled by "
+if self.fill_mode == "zero":
+warning_string += "a 0 signal."
+if self.fill_mode == "fastest":
+warning_string += "duplicates of the fastest signal."
+if self.fill_mode == "noise":
+warning_string += "independent white-noise."
+warnings.warn(warning_string, RuntimeWarning)
+else:
+warning_string += "\n\tSetting 'fill_mode' to replace trivial components\
+with uninformative signals."
+raise ValueError(warning_string)
+self._compute_delta_values()
+def _compute_delta_values(self):
+delta_values_ = self.pca_diff_.explained_variance_[::-1]
+n_missing_components = self.n_components_ - self.n_nontrivial_components_
+if n_missing_components > 0:
+if self.fill_mode == "zero":
+delta_values_ = np.pad(delta_values_, (0, n_missing_components), "constant",
+constant_values=np.nan)
+if self.fill_mode == "fastest":
+delta_values_ = np.pad(delta_values_, (0, n_missing_components),"constant",
+constant_values=delta_values_[-1])
+if self.fill_mode == "noise":
+delta_values_ = np.pad(delta_values_,(0, n_missing_components),"constant",
+constant_values=2)
+self.delta_values_ = delta_values_
+def transform(self, X):
+X = check_array(X, dtype=[np.float64, np.float32], ensure_2d=True, copy=self.copy)
+if (self.is_fitted) and (not self.is_partially_fitted):
+y = self.pca_whiten_.transform(X)
+y = y[:, self.nontrivial_indices_]
+y = self.pca_diff_.transform(y)
+n_missing_components = max(self.n_components_ - y.shape[1], 0)
+if n_missing_components > 0:
+if self.fill_mode == "zero":
+y = np.pad(y, ((0, 0), (n_missing_components, 0)))
+if self.fill_mode == "fastest":
+y = np.pad(y, ((0, 0), (n_missing_components, 0)), "edge")
+if self.fill_mode == "noise":
+missing = np.random.normal(0, 1, (y.shape[0], n_missing_components))
+missing -= missing.mean(axis=0)
+missing /= missing.std(axis=0)
+y = np.hstack([missing, y])
+return y[:, ::-1]
+else:
+y = y[:, -self.n_components_:][:, ::-1]
+elif (self.is_partially_fitted):
+if not (self.is_fitted):
+self._fit_generalized_eigenmethod()
+self.is_fitted_ = True
+y=np.dot(X,self._partial_eigenvectors[:,:self.n_components])-np.dot(self.sample_sum/(self._n_partial_samples), self._partial_eigenvectors[:, :self.n_components])
+else:
+raise NotFittedError("SFA has not yet been fitted via 'fit' or 'partial_fit'")
+return y
+def affine_parameters(self):
+if not self.is_fitted:
+raise AttributeError("Transformer has to be fitted to data before extracting parameters")
+out_dim = self.pca_diff_.components_.shape[0]
+n_missing_components = max(self.n_components_ - out_dim, 0)
+print(n_missing_components)
+if n_missing_components > 0 and self.fill_mode not in (None, "zero"):
+raise RuntimeError("Affine parameters cannot be extracted: missing output dimensions are filled with something else then a 0-signal. Please set 'fill_mode' to 'zero' to avoid this or make sure that your input data has high enough rank.")
+W_whiten = (self.pca_whiten_.components_.T / np.sqrt(self.pca_whiten_.explained_variance_)).T[self.nontrivial_indices_]
+b_whiten = np.dot(-self.pca_whiten_.mean_, W_whiten.T)
+W_diff = self.pca_diff_.components_[::-1][:self.n_components_]
+b_diff = np.dot(- self.pca_diff_.mean_, W_diff.T)[:self.n_components_]
+W_transposed = np.dot(W_whiten.T, W_diff.T)b = np.dot(b_whiten, W_diff.T) + b_diff
+if n_missing_components > 0 and self.fill_mode == "zero":
+W_transposed = np.hstack([W_transposed, np.zeros((W_transposed.shape[0], n_missing_components))])
+b = np.hstack([b, np.zeros((n_missing_components,))])
+return W_transposed.T, b
+
+
+
+def cbam_block(cbam_feature, ratio=8):
+	cbam_feature = channel_attention(cbam_feature, ratio)
+	cbam_feature = spatial_attention(cbam_feature)
+	return cbam_feature
+def channel_attention(input_feature, ratio=8):
+	channel_axis = 1 if K.image_data_format() == "channels_first" else -1
+	channel = input_feature.shape[channel_axis]
+	shared_layer_one = Dense(channel//ratio,
+							 activation='relu',
+							 kernel_initializer='he_normal',
+							 use_bias=True,
+							 bias_initializer='zeros')
+	shared_layer_two = Dense(channel,
+							 kernel_initializer='he_normal',
+							 use_bias=True,
+							 bias_initializer='zeros')
+	avg_pool = GlobalAveragePooling2D()(input_feature)    
+	avg_pool = Reshape((1,1,channel))(avg_pool)
+	assert avg_pool.shape[1:] == (1,1,channel)
+	avg_pool = shared_layer_one(avg_pool)
+	assert avg_pool.shape[1:] == (1,1,channel//ratio)
+	avg_pool = shared_layer_two(avg_pool)
+	assert avg_pool.shape[1:] == (1,1,channel)
+	
+	max_pool = GlobalMaxPooling2D()(input_feature)
+	max_pool = Reshape((1,1,channel))(max_pool)
+	assert max_pool.shape[1:] == (1,1,channel)
+	max_pool = shared_layer_one(max_pool)
+	assert max_pool.shape[1:] == (1,1,channel//ratio)
+	max_pool = shared_layer_two(max_pool)
+	assert max_pool.shape[1:] == (1,1,channel)
+	
+	cbam_feature = Add()([avg_pool,max_pool])
+	cbam_feature = Activation('sigmoid')(cbam_feature)
+	
+	if K.image_data_format() == "channels_first":
+		cbam_feature = Permute((3, 1, 2))(cbam_feature)
+	return multiply([input_feature, cbam_feature])
+
+def spatial_attention(input_feature):
+	kernel_size = 7
+	
+	if K.image_data_format() == "channels_first":
+		channel = input_feature.shape[1]
+		cbam_feature = Permute((2,3,1))(input_feature)
+	else:
+		channel = input_feature.shape[-1]
+		cbam_feature = input_feature
+	
+	avg_pool = Lambda(lambda x: K.mean(x, axis=3, keepdims=True))(cbam_feature)
+	assert avg_pool.shape[-1] == 1
+	max_pool = Lambda(lambda x: K.max(x, axis=3, keepdims=True))(cbam_feature)
+	assert max_pool.shape[-1] == 1
+	concat = Concatenate(axis=3)([avg_pool, max_pool])
+	assert concat.shape[-1] == 2
+	cbam_feature = Conv2D(filters = 1,
+					kernel_size=kernel_size,
+					strides=1,
+					padding='same',
+					activation='sigmoid',
+					kernel_initializer='he_normal',
+					use_bias=False)(concat)	
+	assert cbam_feature.shape[-1] == 1
+	
+	if K.image_data_format() == "channels_first":
+		cbam_feature = Permute((3, 1, 2))(cbam_feature)
+	return multiply([input_feature, cbam_feature])
